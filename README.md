@@ -389,6 +389,92 @@ tts.infer(spk_audio_prompt='examples/voice_12.wav', text=text, output_path="gen.
 > 之前你做DE5很好，所以这一次也DEI3做DE2很好才XING2，如果这次目标完成得不错的话，我们就直接打DI1去银行取钱。
 > ```
 
+### Video Voice-Copy Workflow
+
+This fork includes a small local workflow under `work_voicecopy/` for copying
+the speaker timbre from `tests/original.mp4` into the dialogue timeline of
+`tests/object.mp4`, then exporting a new video.
+
+The workflow uses `work_voicecopy/object_transcript.json` as the editable source
+of truth. If you see `object_ranscript.json` elsewhere, that is a typo; the file
+used by the scripts is `object_transcript.json`.
+
+Expected inputs:
+
+- `tests/original.mp4`: speaker reference video.
+- `tests/object.mp4`: target video whose dialogue timing should be replaced.
+- `work_voicecopy/original_prompt_15s.wav`: extracted reference voice prompt.
+- `work_voicecopy/object_transcript.json`: editable transcript and timing file.
+
+Run the workflow on Windows with the project virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe work_voicecopy\transcribe_object.py
+.\.venv\Scripts\python.exe work_voicecopy\synthesize_segments.py
+.\.venv\Scripts\python.exe work_voicecopy\build_video.py
+```
+
+If only `start` or `end` values changed in `object_transcript.json`, you can run
+only `build_video.py` because the synthesized segment wav files are reused. If
+any `text` value changed, run `synthesize_segments.py` first, then
+`build_video.py`.
+
+#### `object_transcript.json`
+
+`object_transcript.json` is designed to be edited by hand:
+
+```json
+{
+  "language": "zh",
+  "probability": 0.99,
+  "segments": [
+    {
+      "start": 1.04,
+      "end": 2.44,
+      "text": "全民制作人们大家好"
+    }
+  ]
+}
+```
+
+Each segment has:
+
+- `start`: when this sentence starts in `tests/object.mp4`, in seconds.
+- `end`: when this sentence ends, in seconds.
+- `text`: the text sent to IndexTTS2 for this segment.
+
+Increasing `end` makes the final fitted segment slower or less compressed.
+Decreasing `end` makes it faster. Segments must be ordered and must not overlap.
+The transcription and synthesis scripts convert recognized text to Simplified
+Chinese with OpenCC because the current model performs poorly with Traditional
+Chinese in this workflow.
+
+#### `build_video.py` logic
+
+`work_voicecopy/build_video.py` does not read a fixed timing table. It loads
+`work_voicecopy/object_transcript.json`, validates each non-empty segment, and
+uses the segment order to match `work_voicecopy/tts_segments/seg_XX.wav`.
+
+For each segment, the script:
+
+1. Inserts silence for any gap before the segment.
+2. Measures the generated `seg_XX.wav` duration with `ffprobe`.
+3. Computes `source_duration / (end - start)`.
+4. Builds a safe chained `atempo` filter so FFmpeg can speed up or slow down the
+   audio even when the ratio is outside a single `atempo` range.
+5. Applies `apad` and `atrim` so the fitted wav is exactly the JSON segment
+   duration.
+6. Concatenates all gaps, fitted segments, and tail silence into
+   `work_voicecopy/object_voicecopied_track.wav`.
+
+It then exports two videos:
+
+- `tests/object_voicecopied.mp4`: keeps the original video stream and replaces
+  the audio with the generated voice track.
+- `tests/object_voicecopied_with_bg.mp4`: keeps the original background audio,
+  ducks it to `0.08` during JSON speech windows, mixes the generated voice at
+  `1.4`, and applies a limiter.
+
 ### Legacy: IndexTTS1 User Guide
 
 You can also use our previous IndexTTS1 model by importing a different module:
